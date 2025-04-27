@@ -1,0 +1,256 @@
+openapi: 3.0.0
+info:
+  title: Files Uploader API
+  description: |-
+    API for uploading files from URLs to Google Drive and receiving their status.
+    It accepts URLs, processes them in the background using queues,
+    and provides endpoints to track the status and retrieve Google Drive links.
+  version: 1.0.0
+servers:
+  - url: http://localhost:3000
+    description: Development server
+tags:
+  - name: Files
+    description: Operations related to file processing and retrieval
+
+paths:
+  /files/upload-from-urls:
+    post:
+      tags:
+        - Files
+      summary: Initiate File Uploads from URLs
+      description: |-
+        Accepts an array of file URLs.
+        For each URL, it creates a file record in the database with 'pending' status
+        and adds a job to a background queue for processing.
+        The background job will download the file from the URL and upload it to Google Drive.
+        The response is immediate (202 Accepted) indicating that processing has started.
+      operationId: initiateUploads
+      requestBody:
+        required: true
+        description: Array of URLs to process.
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UploadUrlsDto'
+      responses:
+        '202':
+          description: Processing initiated successfully. Returns references to the background jobs created.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: File processing initiated for the provided URLs.
+                  jobs:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        jobId:
+                          type: string
+                          description: ID of the background job added to the queue.
+                          example: '123'
+                        originalUrl:
+                          type: string
+                          format: url
+                          description: The original URL submitted for processing.
+                          example: 'https://example.com/file1.pdf'
+        '400':
+          description: Invalid input data (e.g., body is not an array, contains non-URL strings).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error occurred while initiating the process.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /files:
+    get:
+      tags:
+        - Files
+      summary: List All File Records
+      description: Retrieves a list of all file records stored in the database, including their status and Google Drive links (if processing is complete). The list is ordered by creation date, newest first.
+      operationId: getAllFiles
+      responses:
+        '200':
+          description: A list of file records.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/File'
+        '500':
+          description: Internal server error occurred while retrieving file list.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /files/{id}:
+    get:
+      tags:
+        - Files
+      summary: Get File Record by ID
+      description: Retrieves the details of a specific file record using its unique identifier (UUID).
+      operationId: getFileById
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: UUID of the file record to retrieve.
+          schema:
+            type: string
+            format: uuid
+            example: 'f47ac10b-58cc-4372-a567-0e02b2c3d479'
+      responses:
+        '200':
+          description: Details of the requested file record.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/File'
+        '400':
+          description: Invalid UUID format provided in the path.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: File record with the specified ID was not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error occurred while retrieving the file record.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+components:
+  schemas:
+    UploadUrlsDto:
+      type: object
+      required:
+        - urls
+      properties:
+        urls:
+          type: array
+          items:
+            type: string
+            format: url
+            description: URL of the file to download and upload.
+          description: An array of valid URLs to be processed.
+          minItems: 1
+          example: ["https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf", "https://dummyimage.com/600x400/000/fff"]
+
+    FileStatus:
+      type: string
+      description: The current status of the file processing job.
+      enum:
+        - pending
+        - processing
+        - completed
+        - failed
+      example: completed
+
+    File:
+      type: object
+      description: Represents a file record in the system.
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Unique identifier for the file record (UUID).
+          readOnly: true
+          example: 'a1b2c3d4-e5f6-7890-1234-567890abcdef'
+        originalUrl:
+          type: string
+          format: url
+          description: The original URL from which the file was requested.
+          example: 'https://example.com/file1.pdf'
+        fileName:
+          type: string
+          description: The name of the file detected during download or assigned during upload. Nullable if detection failed before completion.
+          nullable: true
+          example: 'dummy.pdf'
+        mimeType:
+          type: string
+          description: The detected MIME type of the file. Nullable if detection failed before completion.
+          nullable: true
+          example: 'application/pdf'
+        googleDriveId:
+          type: string
+          description: The ID of the file on Google Drive after successful upload. Nullable if not yet completed or failed.
+          nullable: true
+          readOnly: true
+          example: '1-AbCdEfGhIjKlMnOpQrStUvWxYz'
+        googleDriveLink:
+          type: string
+          format: url
+          description: A web link to view the file on Google Drive. Nullable if not yet completed or failed.
+          nullable: true
+          readOnly: true
+          example: 'https://drive.google.com/file/d/1-AbCdEfGhIjKlMnOpQrStUvWxYz/view?usp=sharing'
+        status:
+          $ref: '#/components/schemas/FileStatus'
+        errorMessage:
+          type: string
+          description: Contains the error message if the status is 'failed'. Nullable otherwise.
+          nullable: true
+          readOnly: true
+          example: 'Download timed out'
+        createdAt:
+          type: string
+          format: date-time
+          description: Timestamp when the file record was created.
+          readOnly: true
+          example: '2025-04-27T10:30:00Z'
+        updatedAt:
+          type: string
+          format: date-time
+          description: Timestamp when the file record was last updated.
+          readOnly: true
+          example: '2025-04-27T10:35:15Z'
+
+    ErrorResponse:
+      type: object
+      description: Standard error response format.
+      properties:
+        statusCode:
+          type: integer
+          description: HTTP status code.
+          example: 400
+        message:
+          oneOf:
+            - type: string
+            - type: array
+              items:
+                type: string
+          description: Error message or validation errors.
+          example: 'Invalid URL format in urls array'
+        error:
+          type: string
+          description: Short description of the error type (e.g., 'Bad Request', 'Not Found').
+          nullable: true
+          example: 'Bad Request'
+        timestamp:
+          type: string
+          format: date-time
+          description: Timestamp when the error occurred.
+          nullable: true
+          example: '2025-04-27T10:40:00Z'
+        path:
+          type: string
+          description: The API path that triggered the error.
+          nullable: true
+          example: '/files/upload-from-urls'
